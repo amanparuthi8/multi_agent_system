@@ -12,12 +12,13 @@
 4. [MCP Tool Interfaces](#4-mcp-tool-interfaces)
 5. [Workflow Design Patterns](#5-workflow-design-patterns)
 6. [Project Structure](#6-project-structure)
-7. [Local Development Setup](#7-local-development-setup)
-8. [GitHub Setup](#8-github-setup)
-9. [Cloud Run Deployment](#9-cloud-run-deployment)
-10. [API Reference](#10-api-reference)
-11. [End-to-End Workflow Example](#11-end-to-end-workflow-example)
-12. [Design Decisions](#12-design-decisions)
+7. [AlloyDB Connectivity Setup](#7-alloydb-connectivity-setup-cloud-shell--private-vpc)
+8. [Local Development Setup](#8-local-development-setup)
+9. [GitHub Setup](#9-github-setup)
+10. [Cloud Run Deployment](#10-cloud-run-deployment)
+11. [API Reference](#11-api-reference)
+12. [End-to-End Workflow Example](#12-end-to-end-workflow-example)
+13. [Design Decisions](#13-design-decisions)
 
 ---
 
@@ -140,7 +141,7 @@ If `check_conflicts` returns `conflict_count > 0`, the workflow reports the conf
 ## 6. Project Structure
 
 ```
-multi-agent-system/
+multi_agent_system/
 ├── agents/
 │   ├── __init__.py          exports root_agent
 │   ├── orchestrator.py      primary controller / router
@@ -179,15 +180,93 @@ multi-agent-system/
 
 ---
 
-## 7. Local Development Setup
+## 7. AlloyDB Connectivity Setup (Cloud Shell → Private VPC)
+
+AlloyDB uses a **private IP** and is not directly reachable from Cloud Shell. The correct approach is to create a bastion VM inside the same VPC as the AlloyDB instance and run commands from there.
+
+### Prerequisites
+- AlloyDB cluster: `mas-cluster` in `us-central1`
+- AlloyDB private IP: `10.234.0.5`
+- AlloyDB VPC: `easy-alloydb-vpc` / subnet: `easy-alloydb-subnet`
+
+### Step 1: Identify the AlloyDB VPC and Subnet
+
+```bash
+gcloud alloydb clusters describe mas-cluster --region=us-central1 --format="get(network)"
+# Output: projects/<PROJECT_NUMBER>/global/networks/easy-alloydb-vpc
+
+gcloud compute networks subnets list --filter="network:easy-alloydb-vpc" --regions=us-central1
+# Note the subnet name: easy-alloydb-subnet
+```
+
+### Step 2: Create a Bastion VM Inside the AlloyDB VPC
+
+> **Important:** The VM must be on the **same VPC** as AlloyDB, not the `default` network.
+
+```bash
+gcloud compute instances create alloydb-bastion \
+  --zone=us-central1-f \
+  --machine-type=e2-micro \
+  --network=easy-alloydb-vpc \
+  --subnet=easy-alloydb-subnet \
+  --scopes=https://www.googleapis.com/auth/cloud-platform
+```
+
+> If a zone is out of capacity (`ZONE_RESOURCE_POOL_EXHAUSTED`), try `us-central1-b`, `us-central1-c`, or `us-central1-f`.
+
+### Step 3: SSH Into the Bastion VM
+
+```bash
+gcloud compute ssh alloydb-bastion --zone=us-central1-f
+```
+
+### Step 4: Install PostgreSQL Client on the VM
+
+```bash
+sudo apt-get update && sudo apt-get install -y postgresql-client
+```
+
+### Step 5: Copy Schema File From Cloud Shell to the VM
+
+Open a **second Cloud Shell tab** and run:
+
+```bash
+gcloud compute scp ~/multi_agent_system/database/schema.sql alloydb-bastion:~ --zone=us-central1-f
+```
+
+### Step 6: Apply the Schema From the Bastion VM
+
+Back in the SSH session:
+
+```bash
+PGPASSWORD="admin" psql \
+  -h 10.234.0.5 \
+  -U postgres \
+  -d postgres \
+  -f ~/schema.sql
+```
+
+### Why Not AlloyDB Auth Proxy from Cloud Shell?
+
+The Auth Proxy itself requires VPC-level connectivity to reach AlloyDB's private IP. Cloud Shell runs outside your VPC, so even with the proxy running locally, it cannot dial `10.234.0.5`. The bastion VM approach works because the VM is inside the VPC and has direct network access to AlloyDB.
+
+### Cleanup (After Setup)
+
+```bash
+gcloud compute instances delete alloydb-bastion --zone=us-central1-f --quiet
+```
+
+---
+
+## 8. Local Development Setup
 
 ### Prerequisites
 - Python 3.12, `uv` (`pip install uv`), gcloud CLI
 
 ```bash
 # 1. Clone + configure
-git clone https://github.com/YOUR_ORG/multi-agent-system.git
-cd multi-agent-system
+git clone https://github.com/amanparuthi/multi_agent_system.git
+cd multi_agent_system
 cp .env.example .env
 # Edit .env: GOOGLE_CLOUD_PROJECT, ALLOYDB_*, etc.
 
@@ -221,12 +300,12 @@ pytest tests/ -v
 
 ---
 
-## 8. GitHub Setup
+## 9. GitHub Setup
 
 ```bash
 git init && git add .
 git commit -m "feat: initial multi-agent system"
-git remote add origin https://github.com/YOUR_ORG/multi-agent-system.git
+git remote add origin https://github.com/YOUR_ORG/multi_agent_system.git
 git branch -M main && git push -u origin main
 ```
 
@@ -236,7 +315,7 @@ Required secrets: `GCP_PROJECT_ID`, `GCP_SA_KEY`, `ALLOYDB_PASSWORD`.
 
 ---
 
-## 9. Cloud Run Deployment
+## 10. Cloud Run Deployment
 
 ### One command
 ```bash
@@ -260,11 +339,11 @@ chmod +x scripts/deploy.sh && ./scripts/deploy.sh
 ```bash
 PROJECT_ID=$(gcloud config get-value project)
 REGION=us-central1
-IMAGE="${REGION}-docker.pkg.dev/${PROJECT_ID}/mas-repo/multi-agent-system:latest"
+IMAGE="${REGION}-docker.pkg.dev/${PROJECT_ID}/mas-repo/multi_agent_system:latest"
 
 gcloud builds submit . --tag="$IMAGE"
 
-gcloud run deploy multi-agent-system \
+gcloud run deploy multi_agent_system \
   --image="$IMAGE" --platform=managed --region="$REGION" \
   --service-account="mas-service-account@${PROJECT_ID}.iam.gserviceaccount.com" \
   --no-allow-unauthenticated \
@@ -275,7 +354,7 @@ gcloud run deploy multi-agent-system \
 
 ---
 
-## 10. API Reference
+## 11. API Reference
 
 ### `POST /api/v1/query`
 ```bash
@@ -303,7 +382,7 @@ Interactive docs at `https://YOUR_URL/docs`
 
 ---
 
-## 11. End-to-End Workflow Example
+## 12. End-to-End Workflow Example
 
 **User:** *"Schedule a product review with sarah@co.com next Monday 2–3pm, create a follow-up task to send notes, and save our product vision as a note."*
 
@@ -342,7 +421,7 @@ Response: "📅 Product Review scheduled Monday 14:00–15:00 with sarah@co.com.
 
 ---
 
-## 12. Design Decisions
+## 13. Design Decisions
 
 | Decision | Choice | Justification from .md |
 |----------|--------|------------------------|
