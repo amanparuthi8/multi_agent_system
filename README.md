@@ -185,18 +185,18 @@ multi_agent_system/
 AlloyDB uses a **private IP** and is not directly reachable from Cloud Shell. The correct approach is to create a bastion VM inside the same VPC as the AlloyDB instance and run commands from there.
 
 ### Prerequisites
-- AlloyDB cluster: `mas-cluster` in `us-central1`
-- AlloyDB private IP: `10.234.0.5`
-- AlloyDB VPC: `easy-alloydb-vpc` / subnet: `easy-alloydb-subnet`
+- AlloyDB cluster: `<YOUR_CLUSTER_NAME>` in `<YOUR_GCP_REGION>`
+- AlloyDB private IP: `<YOUR_ALLOYDB_PRIVATE_IP>`
+- AlloyDB VPC: `<YOUR_VPC_NAME>` / subnet: `<YOUR_SUBNET_NAME>`
 
 ### Step 1: Identify the AlloyDB VPC and Subnet
 
 ```bash
-gcloud alloydb clusters describe mas-cluster --region=us-central1 --format="get(network)"
-# Output: projects/<PROJECT_NUMBER>/global/networks/easy-alloydb-vpc
+gcloud alloydb clusters describe <YOUR_CLUSTER_NAME> --region=<YOUR_GCP_REGION> --format="get(network)"
+# Output: projects/<PROJECT_NUMBER>/global/networks/<YOUR_VPC_NAME>
 
-gcloud compute networks subnets list --filter="network:easy-alloydb-vpc" --regions=us-central1
-# Note the subnet name: easy-alloydb-subnet
+gcloud compute networks subnets list --filter="network:<YOUR_VPC_NAME>" --regions=<YOUR_GCP_REGION>
+# Note the subnet name: <YOUR_SUBNET_NAME>
 ```
 
 ### Step 2: Create a Bastion VM Inside the AlloyDB VPC
@@ -205,19 +205,19 @@ gcloud compute networks subnets list --filter="network:easy-alloydb-vpc" --regio
 
 ```bash
 gcloud compute instances create alloydb-bastion \
-  --zone=us-central1-f \
+  --zone=<YOUR_GCP_REGION>-f \
   --machine-type=e2-micro \
-  --network=easy-alloydb-vpc \
-  --subnet=easy-alloydb-subnet \
+  --network=<YOUR_VPC_NAME> \
+  --subnet=<YOUR_SUBNET_NAME> \
   --scopes=https://www.googleapis.com/auth/cloud-platform
 ```
 
-> If a zone is out of capacity (`ZONE_RESOURCE_POOL_EXHAUSTED`), try `us-central1-b`, `us-central1-c`, or `us-central1-f`.
+> If a zone is out of capacity (`ZONE_RESOURCE_POOL_EXHAUSTED`), try `<YOUR_GCP_REGION>-b`, `<YOUR_GCP_REGION>-c`, or `<YOUR_GCP_REGION>-f`.
 
 ### Step 3: SSH Into the Bastion VM
 
 ```bash
-gcloud compute ssh alloydb-bastion --zone=us-central1-f
+gcloud compute ssh alloydb-bastion --zone=<YOUR_GCP_REGION>-f
 ```
 
 ### Step 4: Install PostgreSQL Client on the VM
@@ -231,7 +231,7 @@ sudo apt-get update && sudo apt-get install -y postgresql-client
 Open a **second Cloud Shell tab** and run:
 
 ```bash
-gcloud compute scp ~/multi_agent_system/database/schema.sql alloydb-bastion:~ --zone=us-central1-f
+gcloud compute scp ~/multi_agent_system/database/schema.sql alloydb-bastion:~ --zone=<YOUR_GCP_REGION>-f
 ```
 
 ### Step 6: Apply the Schema From the Bastion VM
@@ -239,21 +239,21 @@ gcloud compute scp ~/multi_agent_system/database/schema.sql alloydb-bastion:~ --
 Back in the SSH session:
 
 ```bash
-PGPASSWORD="admin" psql \
-  -h 10.234.0.5 \
-  -U postgres \
-  -d postgres \
+PGPASSWORD="<YOUR_ALLOYDB_PASSWORD>" psql \
+  -h <YOUR_ALLOYDB_PRIVATE_IP> \
+  -U <YOUR_DB_USER> \
+  -d <YOUR_DB_NAME> \
   -f ~/schema.sql
 ```
 
 ### Why Not AlloyDB Auth Proxy from Cloud Shell?
 
-The Auth Proxy itself requires VPC-level connectivity to reach AlloyDB's private IP. Cloud Shell runs outside your VPC, so even with the proxy running locally, it cannot dial `10.234.0.5`. The bastion VM approach works because the VM is inside the VPC and has direct network access to AlloyDB.
+The Auth Proxy itself requires VPC-level connectivity to reach AlloyDB's private IP. Cloud Shell runs outside your VPC, so even with the proxy running locally, it cannot dial `<YOUR_ALLOYDB_PRIVATE_IP>`. The bastion VM approach works because the VM is inside the VPC and has direct network access to AlloyDB.
 
 ### Cleanup (After Setup)
 
 ```bash
-gcloud compute instances delete alloydb-bastion --zone=us-central1-f --quiet
+gcloud compute instances delete alloydb-bastion --zone=<YOUR_GCP_REGION>-f --quiet
 ```
 
 ---
@@ -265,7 +265,7 @@ gcloud compute instances delete alloydb-bastion --zone=us-central1-f --quiet
 
 ```bash
 # 1. Clone + configure
-git clone https://github.com/amanparuthi/multi_agent_system.git
+git clone https://github.com/<YOUR_GITHUB_ORG>/multi_agent_system.git
 cd multi_agent_system
 cp .env.example .env
 # Edit .env: GOOGLE_CLOUD_PROJECT, ALLOYDB_*, etc.
@@ -305,7 +305,7 @@ pytest tests/ -v
 ```bash
 git init && git add .
 git commit -m "feat: initial multi-agent system"
-git remote add origin https://github.com/YOUR_ORG/multi_agent_system.git
+git remote add origin https://github.com/<YOUR_GITHUB_ORG>/multi_agent_system.git
 git branch -M main && git push -u origin main
 ```
 
@@ -338,14 +338,14 @@ chmod +x scripts/deploy.sh && ./scripts/deploy.sh
 ### Manual deploy
 ```bash
 PROJECT_ID=$(gcloud config get-value project)
-REGION=us-central1
-IMAGE="${REGION}-docker.pkg.dev/${PROJECT_ID}/mas-repo/multi_agent_system:latest"
+REGION=<YOUR_GCP_REGION>
+IMAGE="${REGION}-docker.pkg.dev/${PROJECT_ID}/<YOUR_ARTIFACT_REPO>/multi_agent_system:latest"
 
 gcloud builds submit . --tag="$IMAGE"
 
 gcloud run deploy multi_agent_system \
   --image="$IMAGE" --platform=managed --region="$REGION" \
-  --service-account="mas-service-account@${PROJECT_ID}.iam.gserviceaccount.com" \
+  --service-account="<YOUR_SERVICE_ACCOUNT>@${PROJECT_ID}.iam.gserviceaccount.com" \
   --no-allow-unauthenticated \
   --set-env-vars="GOOGLE_CLOUD_PROJECT=${PROJECT_ID},MODEL=gemini-2.5-flash,GOOGLE_GENAI_USE_VERTEXAI=1" \
   --set-secrets="ALLOYDB_PASSWORD=alloydb-password:latest" \
@@ -361,7 +361,7 @@ gcloud run deploy multi_agent_system \
 curl -X POST https://YOUR_URL/api/v1/query \
   -H "Authorization: Bearer $(gcloud auth print-identity-token)" \
   -H "Content-Type: application/json" \
-  -d '{"user_id":"alice","session_id":"s-1","message":"Schedule standup tomorrow 9am"}'
+  -d '{"user_id":"<YOUR_USER_ID>","session_id":"s-1","message":"Schedule standup tomorrow 9am"}'
 ```
 Returns: `{session_id, response, agent_used, tool_calls[], interaction_id, latency_ms}`
 
@@ -384,7 +384,7 @@ Interactive docs at `https://YOUR_URL/docs`
 
 ## 12. End-to-End Workflow Example
 
-**User:** *"Schedule a product review with sarah@co.com next Monday 2–3pm, create a follow-up task to send notes, and save our product vision as a note."*
+**User:** *"Schedule a product review with <ATTENDEE_EMAIL> next Monday 2–3pm, create a follow-up task to send notes, and save our product vision as a note."*
 
 ```
 POST /api/v1/query
@@ -413,7 +413,7 @@ VALIDATION TABLE:
 
 Both turns saved to interactions table (session continuity).
 
-Response: "📅 Product Review scheduled Monday 14:00–15:00 with sarah@co.com.
+Response: "📅 Product Review scheduled Monday 14:00–15:00 with <ATTENDEE_EMAIL>.
            ✅ Task 'Send meeting notes' created (high priority).
            📝 Product Vision note saved.
            ✅ Done: 4 actions completed."
