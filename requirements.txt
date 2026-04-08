@@ -1,0 +1,38 @@
+# ============================================================
+# Multi-Agent System — Python Dependencies
+# google-adk==1.14.0, gemini-2.5-flash, toolbox-core (from .md)
+# Python 3.12 required
+# ============================================================
+
+# ── Google ADK + AI ───────────────────────────────────────────────────────────
+google-adk==1.14.0
+google-cloud-aiplatform>=1.60.0
+google-cloud-logging>=3.10.0
+google-auth>=2.29.0
+google-genai>=0.8.0
+
+# ── MCP Toolbox client (Lab 4 pattern) ───────────────────────────────────────
+toolbox-core>=0.3.0
+
+# ── Database — AlloyDB via pg8000 (no libpq → smaller Docker image) ──────────
+sqlalchemy>=2.0.30
+pg8000>=1.31.2
+
+# ── API layer ─────────────────────────────────────────────────────────────────
+fastapi>=0.111.0
+uvicorn[standard]>=0.29.0
+pydantic>=2.7.0
+python-multipart>=0.0.9
+
+# ── Configuration ─────────────────────────────────────────────────────────────
+python-dotenv>=1.0.1
+
+# ── Observability ─────────────────────────────────────────────────────────────
+opentelemetry-api>=1.24.0
+opentelemetry-sdk>=1.24.0
+opentelemetry-exporter-gcp-trace>=1.6.0
+
+# ── Testing ───────────────────────────────────────────────────────────────────
+pytest>=8.2.0
+pytest-asyncio>=0.23.0
+httpx>=0.27.0

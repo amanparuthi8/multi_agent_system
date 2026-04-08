@@ -1,0 +1,318 @@
+# ============================================================
+# MCP Toolbox for Databases — tools.yaml
+# Pattern from Lab 4 (MCP Toolbox for BigQuery Datasets)
+# adapted for AlloyDB (PostgreSQL) as the backing store.
+# Start server:  ./toolbox --tools-file="tools.yaml"
+# Test:          curl http://localhost:5000/api/toolset
+# ============================================================
+
+sources:
+  alloydb-source:
+    kind: alloydb-postgres        # AlloyDB PostgreSQL dialect
+    project:  "${ALLOYDB_PROJECT}"
+    region:   "${ALLOYDB_REGION}"
+    cluster:  "${ALLOYDB_CLUSTER}"
+    instance: "${ALLOYDB_INSTANCE}"
+    database: "${ALLOYDB_DB}"
+    user:     "${ALLOYDB_USER}"
+    password: "${ALLOYDB_PASSWORD}"
+
+# ────────────────────────────────────────────────────────────
+# TASK TOOLS
+# ────────────────────────────────────────────────────────────
+tools:
+
+  create_task:
+    kind: alloydb-postgres-sql
+    source: alloydb-source
+    description: >
+      Create a new task for a user. Returns the new task_id.
+    parameters:
+      - name: user_id
+        type: string
+        description: ID of the user owning this task
+      - name: title
+        type: string
+        description: Short title of the task
+      - name: description
+        type: string
+        description: Detailed description (may be empty string)
+      - name: priority
+        type: string
+        description: "One of: low, medium, high, critical"
+      - name: due_date
+        type: string
+        description: "ISO-8601 datetime string or empty string"
+      - name: tags
+        type: string
+        description: "Comma-separated tags, e.g. 'work,urgent'"
+    statement: |
+      INSERT INTO tasks (user_id, title, description, priority, due_date, tags)
+      VALUES (
+        $1,
+        $2,
+        NULLIF($3, ''),
+        $4,
+        NULLIF($5, '')::TIMESTAMP,
+        string_to_array(NULLIF($6,''), ',')
+      )
+      RETURNING task_id, title, status, priority, created_at;
+
+  list_tasks:
+    kind: alloydb-postgres-sql
+    source: alloydb-source
+    description: >
+      List tasks for a user. Optionally filter by status.
+    parameters:
+      - name: user_id
+        type: string
+        description: User ID
+      - name: status_filter
+        type: string
+        description: "Filter by status (pending/in_progress/done/cancelled) or empty for all"
+    statement: |
+      SELECT task_id, title, description, status, priority, due_date, tags, created_at
+      FROM tasks
+      WHERE user_id = $1
+        AND ($2 = '' OR status = $2)
+      ORDER BY
+        CASE priority
+          WHEN 'critical' THEN 1 WHEN 'high' THEN 2
+          WHEN 'medium'   THEN 3 WHEN 'low'  THEN 4
+        END,
+        due_date ASC NULLS LAST
+      LIMIT 50;
+
+  update_task_status:
+    kind: alloydb-postgres-sql
+    source: alloydb-source
+    description: >
+      Update the status of an existing task.
+    parameters:
+      - name: task_id
+        type: string
+        description: UUID of the task
+      - name: new_status
+        type: string
+        description: "New status: pending | in_progress | done | cancelled"
+    statement: |
+      UPDATE tasks
+      SET status = $2, updated_at = NOW()
+      WHERE task_id = $1::UUID
+      RETURNING task_id, title, status, updated_at;
+
+  delete_task:
+    kind: alloydb-postgres-sql
+    source: alloydb-source
+    description: Delete a task by ID.
+    parameters:
+      - name: task_id
+        type: string
+        description: UUID of the task to delete
+    statement: |
+      DELETE FROM tasks WHERE task_id = $1::UUID
+      RETURNING task_id, title;
+
+# ────────────────────────────────────────────────────────────
+# CALENDAR / EVENT TOOLS
+# ────────────────────────────────────────────────────────────
+
+  schedule_event:
+    kind: alloydb-postgres-sql
+    source: alloydb-source
+    description: >
+      Schedule a new calendar event, optionally linked to a task.
+    parameters:
+      - name: user_id
+        type: string
+        description: User ID
+      - name: title
+        type: string
+        description: Event title
+      - name: description
+        type: string
+        description: Event description
+      - name: start_time
+        type: string
+        description: "ISO-8601 start datetime"
+      - name: end_time
+        type: string
+        description: "ISO-8601 end datetime"
+      - name: location
+        type: string
+        description: Physical or virtual location (may be empty)
+      - name: attendees
+        type: string
+        description: "Comma-separated attendee emails"
+      - name: linked_task_id
+        type: string
+        description: "UUID of a linked task, or empty string"
+    statement: |
+      INSERT INTO events (user_id, title, description, start_time, end_time,
+                          location, attendees, linked_task_id)
+      VALUES (
+        $1, $2, NULLIF($3,''),
+        $4::TIMESTAMP, $5::TIMESTAMP,
+        NULLIF($6,''),
+        string_to_array(NULLIF($7,''), ','),
+        NULLIF($8,'')::UUID
+      )
+      RETURNING event_id, title, start_time, end_time;
+
+  list_events:
+    kind: alloydb-postgres-sql
+    source: alloydb-source
+    description: >
+      List upcoming events for a user within a date range.
+    parameters:
+      - name: user_id
+        type: string
+        description: User ID
+      - name: from_time
+        type: string
+        description: "ISO-8601 start of range"
+      - name: to_time
+        type: string
+        description: "ISO-8601 end of range"
+    statement: |
+      SELECT event_id, title, description, start_time, end_time,
+             location, attendees, linked_task_id
+      FROM events
+      WHERE user_id = $1
+        AND start_time BETWEEN $2::TIMESTAMP AND $3::TIMESTAMP
+      ORDER BY start_time ASC;
+
+  check_conflicts:
+    kind: alloydb-postgres-sql
+    source: alloydb-source
+    description: >
+      Check if a proposed time slot conflicts with existing events.
+    parameters:
+      - name: user_id
+        type: string
+        description: User ID
+      - name: start_time
+        type: string
+        description: "Proposed start (ISO-8601)"
+      - name: end_time
+        type: string
+        description: "Proposed end (ISO-8601)"
+    statement: |
+      SELECT COUNT(*) AS conflict_count,
+             ARRAY_AGG(title) AS conflicting_events
+      FROM events
+      WHERE user_id = $1
+        AND tsrange(start_time, end_time) && tsrange($2::TIMESTAMP, $3::TIMESTAMP);
+
+# ────────────────────────────────────────────────────────────
+# KNOWLEDGE / NOTES TOOLS
+# ────────────────────────────────────────────────────────────
+
+  create_note:
+    kind: alloydb-postgres-sql
+    source: alloydb-source
+    description: >
+      Save a note. AlloyDB AI auto-generates the semantic embedding
+      using text-embedding-005 (768-dim) during INSERT.
+    parameters:
+      - name: user_id
+        type: string
+        description: User ID
+      - name: title
+        type: string
+        description: Note title
+      - name: content
+        type: string
+        description: Full note content
+      - name: tags
+        type: string
+        description: "Comma-separated tags"
+    statement: |
+      INSERT INTO notes (user_id, title, content, tags, content_vector)
+      VALUES (
+        $1, $2, $3,
+        string_to_array(NULLIF($4,''), ','),
+        embedding('text-embedding-005', $3)::vector
+      )
+      RETURNING note_id, title, created_at;
+
+  search_notes:
+    kind: alloydb-postgres-sql
+    source: alloydb-source
+    description: >
+      Semantic similarity search over notes using pgvector cosine distance.
+      Returns top-k most relevant notes for a query string.
+    parameters:
+      - name: user_id
+        type: string
+        description: User ID
+      - name: query
+        type: string
+        description: Natural-language query string
+      - name: top_k
+        type: integer
+        description: "Number of results to return (default 5)"
+    statement: |
+      SELECT note_id, title, content, tags,
+             1 - (content_vector <=> embedding('text-embedding-005', $2)::vector) AS similarity
+      FROM notes
+      WHERE user_id = $1
+      ORDER BY content_vector <=> embedding('text-embedding-005', $2)::vector
+      LIMIT $3;
+
+# ────────────────────────────────────────────────────────────
+# INTERACTION HISTORY TOOLS
+# ────────────────────────────────────────────────────────────
+
+  get_recent_interactions:
+    kind: alloydb-postgres-sql
+    source: alloydb-source
+    description: >
+      Retrieve the last N interactions for a session (short-term memory context).
+    parameters:
+      - name: session_id
+        type: string
+        description: Session ID
+      - name: limit_n
+        type: integer
+        description: Number of recent interactions to retrieve
+    statement: |
+      SELECT interaction_id, agent_name, role, content, tool_calls, created_at
+      FROM interactions
+      WHERE session_id = $1
+      ORDER BY created_at DESC
+      LIMIT $2;
+
+# ────────────────────────────────────────────────────────────
+# TOOLSETS  (named groups — loaded by each agent)
+# ────────────────────────────────────────────────────────────
+toolsets:
+  task_toolset:
+    - create_task
+    - list_tasks
+    - update_task_status
+    - delete_task
+
+  calendar_toolset:
+    - schedule_event
+    - list_events
+    - check_conflicts
+
+  knowledge_toolset:
+    - create_note
+    - search_notes
+
+  memory_toolset:
+    - get_recent_interactions
+
+  full_toolset:
+    - create_task
+    - list_tasks
+    - update_task_status
+    - delete_task
+    - schedule_event
+    - list_events
+    - check_conflicts
+    - create_note
+    - search_notes
+    - get_recent_interactions
